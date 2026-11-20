@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>缴费机提示版本轮换对比</title>
+<style>
+  :root { --bd:#d7dce3; --bg:#f6f8fa; --ok:#1a7f37; --bad:#b42318; --muted:#667085; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin:0; background:var(--bg); color:#1f2933; }
+  header { background:#0f2a43; color:#fff; padding:18px 28px; }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:6px 0 0; color:#b8c7d9; font-size:13px; }
+  main { max-width:1180px; margin:24px auto; padding:0 20px; }
+  .card { background:#fff; border:1px solid var(--bd); border-radius:10px; padding:18px 20px; margin-bottom:20px; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  textarea { width:100%; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; border:1px solid var(--bd); border-radius:8px; padding:10px; height:150px; }
+  button { margin-top:10px; background:#1d5fd1; color:#fff; border:0; border-radius:8px; padding:8px 18px; font-size:14px; cursor:pointer; }
+  button:hover { background:#1749a6; }
+  .msg { padding:10px 14px; border-radius:8px; margin-bottom:16px; font-size:14px; }
+  .msg.ok { background:#e7f6ec; color:var(--ok); border:1px solid #b7e0c3; }
+  .msg.err { background:#fdeceb; color:var(--bad); border:1px solid #f3c2bd; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th, td { border:1px solid var(--bd); padding:8px 10px; text-align:center; }
+  th { background:#eef2f7; font-weight:600; }
+  td.left, th.left { text-align:left; }
+  .tag { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .tag.included { background:#e7f6ec; color:var(--ok); }
+  .tag.excluded { background:#fdeceb; color:var(--bad); }
+  .tag.pending { background:#eef0f3; color:var(--muted); }
+  .avg { font-size:18px; font-weight:700; }
+  .muted { color:var(--muted); font-size:12.5px; }
+  details summary { cursor:pointer; color:#1d5fd1; font-size:13px; margin-bottom:8px; }
+  code { background:#eef2f7; padding:1px 5px; border-radius:4px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>自助缴费机 · 提示版本轮换两版办理成功率对比</h1>
+  <p>按开始时所用版本归组 · 开始后 10 分钟内成功计一次 · 观测窗口整分钟日志全到齐且两版均有人开始才纳入</p>
+</header>
+<main>
+  {% if msg_ok %}<div class="msg ok">{{ msg_ok }}</div>{% endif %}
+  {% if msg_err %}<div class="msg err">{{ msg_err }}</div>{% endif %}
+
+  <div class="card">
+    <h2>汇总</h2>
+    {% if data.avg_diff_pp is not none %}
+      <p class="avg">纳入轮次差值（新版 − 旧版，百分点）算术平均：
+        {{ "%+.2f"|format(data.avg_diff_pp) }} pp
+      </p>
+    {% else %}
+      <p class="avg muted">暂无纳入轮次，无法计算平均差值</p>
+    {% endif %}
+    <p class="muted">纳入 {{ data.included_count }} 轮 · 未纳入 {{ data.excluded_count }} 轮（JSON：<a href="/api/rounds">/api/rounds</a>，分钟包：<a href="/api/minutes">/api/minutes</a>）</p>
+  </div>
+
+  <div class="card">
+    <h2>各轮结果</h2>
+    <table>
+      <thead>
+        <tr>
+          <th class="left">轮次</th>
+          <th>观测窗口（含末段后10分钟）</th>
+          <th>状态</th>
+          <th>旧版 成功/开始（成功率）</th>
+          <th>新版 成功/开始（成功率）</th>
+          <th>差值（新−旧，pp）</th>
+          <th class="left">未纳入原因 / 备注</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in data.rounds %}
+        <tr>
+          <td class="left"><strong>{{ r.round_id }}</strong></td>
+          <td>{{ r.window_start }} → {{ r.window_end }}</td>
+          <td><span class="tag {{ r.status }}">
+            {% if r.status == 'included' %}已纳入{% elif r.status == 'excluded' %}未纳入{% else %}待计算{% endif %}
+          </span></td>
+          <td>{{ r.old_successes }}/{{ r.old_starts }}{% if r.old_rate is not none %}（{{ "%.1f"|format(r.old_rate*100) }}%）{% endif %}</td>
+          <td>{{ r.new_successes }}/{{ r.new_starts }}{% if r.new_rate is not none %}（{{ "%.1f"|format(r.new_rate*100) }}%）{% endif %}</td>
+          <td>{% if r.diff_pp is not none %}{{ "%+.2f"|format(r.diff_pp) }}{% else %}—{% endif %}</td>
+          <td class="left">{{ r.reason or '' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="muted">还没有排班，请先在下方导入固定排班。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>① 导入固定排班（仅一次）</h2>
+      <form method="post" action="/schedule">
+        <textarea name="schedule_json" placeholder='{"rounds":[{"round_id":"R1","segments":[{"version":"old","start":"2026-11-20T09:00","end":"2026-11-20T09:01"},{"version":"new","start":"2026-11-20T09:01","end":"2026-11-20T09:02"}]}]}'></textarea>
+        <button type="submit">导入排班</button>
+      </form>
+      <details><summary>字段说明</summary>
+        <p class="muted">每轮两个相邻整分钟时段（end 为末分钟的下一分钟，左闭右开），版本必须分别为 <code>old</code> / <code>new</code>；各轮时段互不重叠。也可用 <code>POST /api/schedule</code>。</p>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>② 上传 / 补传某一分钟日志</h2>
+      <form method="post" action="/logs">
+        <textarea name="minute_json" placeholder='{"minute":"2026-11-20T09:00","entries":[{"txn_id":"T1","ts":"2026-11-20T09:00:20","type":"start"},{"txn_id":"T1","ts":"2026-11-20T09:09:55","type":"success"}]}'></textarea>
+        <button type="submit">上传该分钟（补传整分钟替换，空包 entries:[] 也算收齐）</button>
+      </form>
+      <details><summary>字段说明</summary>
+        <p class="muted">每条含 <code>txn_id</code> 办理号、<code>ts</code> 时间、<code>type</code>（<code>start</code> / <code>success</code>）。每个办理号仅允许一次开始；同一分钟重复上传会整分钟替换，并只重算观测窗口覆盖该分钟的轮次。也可用 <code>POST /api/logs/minute</code>。</p>
+      </details>
+    </div>
+  </div>
+</main>
+</body>
+</html>
