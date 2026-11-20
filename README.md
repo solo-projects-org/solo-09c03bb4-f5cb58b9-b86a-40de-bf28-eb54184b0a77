@@ -14,6 +14,12 @@
 5. **差值与平均**：纳入轮次输出 `新版成功率 − 旧版成功率`（百分点 pp），页面顶部给出这些差值的**算术平均**。
 6. **增量重算**：上传/补正某分钟时，只重算观测窗口覆盖该分钟的轮次；日志替换与统计更新在同一个 SQLite 事务内提交。
 7. **失败安全**：解析、校验或重算失败时事务回滚，原日志与原统计保持不变（HTTP 400/409/422）。
+8. **历史轮次迁入（预览 → 确认两阶段）**：网页或 JSON 上传一个迁入文件，内含一轮**原格式排班**（`round`）与该轮观测窗口内的**原格式分钟包**（`minutes`）。
+   - 库中没有的分钟包**补入**，已有的包**照用**（不覆盖、不修改）；两边都有同一分钟时，事件内容与重复条数必须一致（顺序不限），有差异即列出冲突分钟并整体拒绝迁入。
+   - 沿用排班校验（整分钟、相邻、版本各一）、轮次号唯一、排班时段互不重叠、办理开始全局唯一校验，所有冲突一次性报出（409）；结构性错误返回 400。
+   - 预览列出：待补分钟、共享分钟、新轮结果，以及受补入影响的已有轮次迁入前后的纳入状态与成功率差（含差值变化 pp）；预览不写业务数据。
+   - 确认时按**当前库重新核对**：补入清单、受影响轮次或预览结果有变即拒绝并要求重新预览；不影响本计划的无关补传不妨碍确认。迁入的排班、日志与相关统计在同一事务内一起生效，失败整体回滚、保留原数据。
+   - 迁入轮次以 `source=migrated` 标记，与现行轮次（`current`）在同一张报表中按观测窗口排序展示。
 
 ## 启动（Docker Compose）
 
@@ -29,14 +35,18 @@ SQLite 数据保存在命名卷 `kiosk-data`（容器内 `/data/app.db`）。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/` | 网页：汇总平均、各轮状态/成功率/差值/未纳入原因、排班与日志上传表单 |
+| GET | `/` | 网页：汇总平均、各轮状态/成功率/差值/来源/未纳入原因、排班、日志与历史轮次迁入表单 |
 | POST | `/schedule` | 网页表单导入排班 |
 | POST | `/logs` | 网页表单上传/补传分钟日志 |
+| POST | `/migration/preview` | 网页表单预览历史轮次迁入（渲染预览/冲突页） |
+| POST | `/migration/confirm` | 网页表单凭预览令牌确认迁入 |
 | POST | `/api/schedule` | JSON 导入排班（201；重复导入 409） |
 | POST | `/api/logs/minute` | JSON 上传/补传整分钟日志，返回受影响并重算的轮次 |
-| GET | `/api/rounds` | 全部轮次统计与平均差值（JSON） |
+| POST | `/api/migration/preview` | JSON 迁入预览（200，不写业务数据；结构错误 400、冲突 409） |
+| POST | `/api/migration/confirm` | JSON 凭令牌确认迁入（201；计划过期/冲突 409） |
+| GET | `/api/rounds` | 全部轮次统计与平均差值（含 `source`：current/migrated，JSON） |
 | GET | `/api/minutes` | 已收齐的分钟包清单（JSON） |
-| POST | `/api/reset` | 清空排班、日志与统计（演示用） |
+| POST | `/api/reset` | 清空排班、日志、统计与迁入预览（演示用） |
 
 排班 JSON 示例见 `sample/schedule.json`：
 
@@ -64,11 +74,46 @@ SQLite 数据保存在命名卷 `kiosk-data`（容器内 `/data/app.db`）。
 }
 ```
 
+历史轮次迁入文件示例（完整文件见 `sample/migration.json`）：
+
+```json
+{
+  "round": {
+    "round_id": "H1",
+    "segments": [
+      {"version": "old", "start": "2026-11-20T08:50", "end": "2026-11-20T08:51"},
+      {"version": "new", "start": "2026-11-20T08:51", "end": "2026-11-20T08:52"}
+    ]
+  },
+  "minutes": [
+    {"minute": "2026-11-20T08:50", "entries": [
+      {"txn_id": "H1-A", "ts": "2026-11-20T08:50:20", "type": "start"}]},
+    {"minute": "2026-11-20T08:51", "entries": [
+      {"txn_id": "H1-B", "ts": "2026-11-20T08:51:20", "type": "start"},
+      {"txn_id": "H1-A", "ts": "2026-11-20T08:51:40", "type": "success"}]},
+    {"minute": "2026-11-20T08:52", "entries": []}
+  ]
+}
+```
+
+`minutes` 只需包含该轮观测窗口（首段开头 → 末段结束后 10 分钟，左闭右开）内的包；
+窗口外分钟、文件内重复包会被拒绝。迁入接口的预览与确认分两步：
+
+```bash
+# 1) 预览：返回 token、to_insert、shared、new_round、affected_rounds
+curl -sS -X POST localhost:8000/api/migration/preview \
+  -H 'Content-Type: application/json' -d @sample/migration.json
+# 2) 确认：按当前库重新核对，计划未变化才提交
+curl -sS -X POST localhost:8000/api/migration/confirm \
+  -H 'Content-Type: application/json' -d '{"token":"<预览返回的 token>"}'
+```
+
 ## 本地试跑（无 Docker 环境时）
 
 ```bash
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 python3 tests/e2e_test.py            # 对运行中的服务打真实 HTTP 请求，30 项断言
+python3 tests/migration_e2e_test.py  # 历史轮次迁入端到端试跑，52 项断言
 ```
 
 `tests/e2e_test.py` 覆盖：排班校验（非整分钟、不相邻、重复导入）、跨时段缴费归组、
@@ -76,12 +121,19 @@ python3 tests/e2e_test.py            # 对运行中的服务打真实 HTTP 请�
 分钟补正（整分钟替换 + 仅重算覆盖轮次，含窗口重叠的相邻轮次联动）、
 坏包/重复开始/错分钟被拒且原数据不变、网页 HTML 渲染。
 
+`tests/migration_e2e_test.py` 覆盖：待补/共享分钟分类（顺序不限、内容一致）、
+共享分钟内容与重复条数冲突（409 且列冲突分钟、原数据不变）、开始唯一性冲突（文件内/跨分钟）、
+轮次号重复与排班重叠、窗口外分钟与重复包、预览不写库、预览→确认与令牌一次性、
+预览后无关补传可确认/有关补传计划过期需重新预览、确认期冲突整体回滚、
+受影响轮次纳入状态翻转与成功率差、网页 multipart 预览/确认/冲突页、旧库平滑升级后的迁入。
+
 ## 目录结构
 
 ```
-app/            FastAPI 应用（main 路由、database 存储与事务、stats 统计、models 入参、timeutil 时间）
-app/templates/  网页模板
-sample/         固定排班示例
+app/            FastAPI 应用（main 路由、database 存储与事务、stats 统计、models 入参、
+                migration 迁入预览/确认、timeutil 时间）
+app/templates/  网页模板（总览页 + 迁入预览/冲突页）
+sample/         固定排班与历史轮次迁入示例
 tests/          端到端 HTTP 试跑脚本
 Dockerfile / docker-compose.yml / requirements.txt
 ```
@@ -92,3 +144,6 @@ Dockerfile / docker-compose.yml / requirements.txt
   不经过任何时区换算，避免容器/宿主时区差异。
 - 观测窗口可能重叠的相邻轮次共享同一分钟包；补传该分钟会联动重算所有覆盖它的轮次（测试已覆盖）。
 - 开始事件若落在观测窗口的 10 分钟尾巴（不属于任何时段）会被忽略，不归入任何版本。
+- 迁入预览令牌存于库表 `migration_previews`，随 `/api/reset` 一并清空，24 小时以上的旧预览会在新建预览时自动清理；
+  预览只做干跑（事务回滚），不写排班与日志。
+- 旧版本数据库启动时会自动给 `rounds` 补 `source` 列（默认 `current`）并创建预览表，无需手工迁移。

@@ -36,3 +36,14 @@ class LogEntryIn(BaseModel):
 class MinuteUpload(BaseModel):
     minute: str = Field(..., description="该日志包对应的整分钟 YYYY-MM-DDTHH:MM")
     entries: list[LogEntryIn]
+
+
+class MigrationIn(BaseModel):
+    """历史轮次迁入：一轮原格式排班 + 该轮观测窗口内的原格式分钟包。"""
+
+    round: RoundIn
+    minutes: list[MinuteUpload] = Field(default_factory=list)
+
+
+class MigrationCommitIn(BaseModel):
+    token: str = Field(..., min_length=1, max_length=128)

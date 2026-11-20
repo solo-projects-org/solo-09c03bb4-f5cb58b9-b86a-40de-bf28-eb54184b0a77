@@ -28,6 +28,8 @@
   .tag.included { background:#e7f6ec; color:var(--ok); }
   .tag.excluded { background:#fdeceb; color:var(--bad); }
   .tag.pending { background:#eef0f3; color:var(--muted); }
+  .tag.migrated { background:#f3eefe; color:#6d28d9; }
+  .tag.current { background:#e7f0fd; color:#1d5fd1; }
   .avg { font-size:18px; font-weight:700; }
   .muted { color:var(--muted); font-size:12.5px; }
   details summary { cursor:pointer; color:#1d5fd1; font-size:13px; margin-bottom:8px; }
@@ -63,6 +65,7 @@
       <thead>
         <tr>
           <th class="left">轮次</th>
+          <th>来源</th>
           <th>观测窗口（含末段后10分钟）</th>
           <th>状态</th>
           <th>旧版 成功/开始（成功率）</th>
@@ -75,6 +78,7 @@
       {% for r in data.rounds %}
         <tr>
           <td class="left"><strong>{{ r.round_id }}</strong></td>
+          <td>{% if r.source == 'migrated' %}<span class="tag migrated">历史迁入</span>{% else %}<span class="tag current">现行轮次</span>{% endif %}</td>
           <td>{{ r.window_start }} → {{ r.window_end }}</td>
           <td><span class="tag {{ r.status }}">
             {% if r.status == 'included' %}已纳入{% elif r.status == 'excluded' %}未纳入{% else %}待计算{% endif %}
@@ -85,7 +89,7 @@
           <td class="left">{{ r.reason or '' }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="muted">还没有排班，请先在下方导入固定排班。</td></tr>
+        <tr><td colspan="8" class="muted">还没有排班，请先在下方导入固定排班。</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -113,6 +117,23 @@
         <p class="muted">每条含 <code>txn_id</code> 办理号、<code>ts</code> 时间、<code>type</code>（<code>start</code> / <code>success</code>）。每个办理号仅允许一次开始；同一分钟重复上传会整分钟替换，并只重算观测窗口覆盖该分钟的轮次。也可用 <code>POST /api/logs/minute</code>。</p>
       </details>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>③ 迁入历史轮次（一轮排班 + 该轮观测窗口内的分钟包）</h2>
+    <form method="post" action="/migration/preview">
+      <textarea name="migration_json" style="height:210px;" placeholder='{"round":{"round_id":"H1","segments":[{"version":"old","start":"2026-11-20T08:00","end":"2026-11-20T08:01"},{"version":"new","start":"2026-11-20T08:01","end":"2026-11-20T08:02"}]},"minutes":[{"minute":"2026-11-20T08:00","entries":[{"txn_id":"H1-T1","ts":"2026-11-20T08:00:10","type":"start"}]}]}'></textarea>
+      <button type="submit">预览迁入（先不写库）</button>
+    </form>
+    <details><summary>规则说明</summary>
+      <p class="muted">
+        文件含一轮<strong>原格式排班</strong>（<code>round</code>）与该轮观测窗口内的<strong>原格式分钟包</strong>（<code>minutes</code>）。
+        库中没有的包补入，已有的包照用；两边都有同一分钟时，事件内容与重复条数必须一致（顺序不限），有差异即列出冲突分钟并拒绝迁入。
+        沿用排班、轮次号唯一、办理开始全局唯一校验。预览列出待补分钟、新轮结果，以及受补入影响的已有轮次迁入前后的纳入状态与成功率差；
+        确认时按当前库重新核对，补入清单、受影响轮次或预览结果有变需重新预览，无关补传不妨碍确认。
+        JSON 接口：<code>POST /api/migration/preview</code> 与 <code>POST /api/migration/confirm</code>。
+      </p>
+    </details>
   </div>
 </main>
 </body>

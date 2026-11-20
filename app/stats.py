@@ -151,7 +151,7 @@ def recompute_rounds(conn: sqlite3.Connection, round_rows: list[sqlite3.Row]) ->
 def fetch_dashboard(conn: sqlite3.Connection) -> dict:
     rounds = conn.execute(
         """
-        SELECT r.round_id, r.window_start_min, r.window_end_min,
+        SELECT r.round_id, r.window_start_min, r.window_end_min, r.source,
                rs.status, rs.reason, rs.old_starts, rs.old_successes, rs.old_rate,
                rs.new_starts, rs.new_successes, rs.new_rate, rs.diff_pp, rs.updated_at
         FROM rounds r LEFT JOIN round_stats rs ON rs.round_id = r.round_id

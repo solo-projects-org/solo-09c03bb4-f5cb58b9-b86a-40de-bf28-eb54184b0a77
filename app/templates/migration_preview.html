@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>历史轮次迁入预览 · 缴费机提示版本轮换对比</title>
+<style>
+  :root { --bd:#d7dce3; --bg:#f6f8fa; --ok:#1a7f37; --bad:#b42318; --muted:#667085; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin:0; background:var(--bg); color:#1f2933; }
+  header { background:#0f2a43; color:#fff; padding:18px 28px; }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:6px 0 0; color:#b8c7d9; font-size:13px; }
+  main { max-width:1180px; margin:24px auto; padding:0 20px; }
+  .card { background:#fff; border:1px solid var(--bd); border-radius:10px; padding:18px 20px; margin-bottom:20px; }
+  h2 { font-size:16px; margin:0 0 12px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th, td { border:1px solid var(--bd); padding:8px 10px; text-align:center; }
+  th { background:#eef2f7; font-weight:600; }
+  td.left, th.left { text-align:left; }
+  .tag { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .tag.included { background:#e7f6ec; color:var(--ok); }
+  .tag.excluded { background:#fdeceb; color:var(--bad); }
+  .muted { color:var(--muted); font-size:12.5px; }
+  .msg { padding:10px 14px; border-radius:8px; margin-bottom:16px; font-size:14px; }
+  .msg.err { background:#fdeceb; color:var(--bad); border:1px solid #f3c2bd; }
+  .msg.ok { background:#e7f6ec; color:var(--ok); border:1px solid #b7e0c3; }
+  .conflict { background:#fdeceb; border:1px solid #f3c2bd; border-radius:8px; padding:10px 14px; margin-bottom:8px; font-size:13.5px; }
+  pre { background:#f2f4f7; border:1px solid var(--bd); border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:260px; }
+  button.confirm { background:#1a7f37; color:#fff; border:0; border-radius:8px; padding:10px 22px; font-size:15px; cursor:pointer; }
+  button.confirm:hover { background:#14662c; }
+  a.back { color:#1d5fd1; text-decoration:none; font-size:13.5px; }
+  .pill { display:inline-block; padding:1px 9px; border-radius:999px; font-size:12px; background:#eef2f7; color:#475569; }
+  .pill.insert { background:#e7f0fd; color:#1d5fd1; }
+  .pill.share { background:#f3eefe; color:#6d28d9; }
+  code { background:#eef2f7; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>历史轮次迁入 · 预览{{ '（存在冲突）' if conflicts else '' }}</h1>
+  <p>库中没有的分钟包补入，已有的包照用；同一分钟两边内容与重复条数必须一致（顺序不限）</p>
+</header>
+<main>
+  <p><a class="back" href="/">← 返回总览页</a></p>
+
+  {% if msg_err %}
+  <div class="msg err"><strong>迁入被拒绝：</strong>{{ msg_err }}</div>
+  {% if conflicts %}
+  <div class="card">
+    <h2>冲突明细（{{ conflicts|length }} 项）</h2>
+    {% for c in conflicts %}
+    <div class="conflict">
+      <strong>[{{ c.type }}]</strong> {{ c.message }}
+      {% if c.type == 'minute_conflict' %}
+      <div style="margin-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div><div class="muted">迁入文件：</div><pre>{{ c.incoming | tojson(ensure_ascii=False) }}</pre></div>
+        <div><div class="muted">库中现有：</div><pre>{{ c.existing | tojson(ensure_ascii=False) }}</pre></div>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if raw_json %}
+  <div class="card">
+    <h2>重新编辑迁入文件</h2>
+    <form method="post" action="/migration/preview">
+      <textarea name="migration_json" style="width:100%; height:180px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; border:1px solid var(--bd); border-radius:8px; padding:10px;">{{ raw_json }}</textarea>
+      <p><button type="submit" style="background:#1d5fd1; color:#fff; border:0; border-radius:8px; padding:8px 18px; font-size:14px; cursor:pointer;">重新预览</button></p>
+    </form>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if plan %}
+  <div class="msg ok">预览生成成功。以下内容<strong>尚未写入</strong>，确认后才会在同一事务内与排班、日志、统计一起生效。</div>
+
+  <div class="card">
+    <h2>迁入轮次 {{ plan.round_id }} <span class="pill">历史迁入</span></h2>
+    <p class="muted">观测窗口：{{ plan.window_start }} → {{ plan.window_end }}（含末段后 10 分钟，左闭右开）</p>
+    <p>
+      <span class="pill insert">待补分钟 {{ plan.to_insert|length }} 个</span>
+      <span class="pill share">库中已有（共享）分钟 {{ plan.shared|length }} 个</span>
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>待补分钟（库中没有，确认时补入）</h2>
+    <table>
+      <thead><tr><th class="left">分钟</th><th>条目数</th><th>处理</th></tr></thead>
+      <tbody>
+      {% for m in plan.to_insert %}
+        <tr><td class="left"><code>{{ m.minute }}</code></td><td>{{ m.entry_count }}</td><td>补入</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="muted">无待补分钟：迁入文件中的分钟包库中均已存在。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>共享分钟（库中已有，照用不覆盖，已核对内容一致）</h2>
+    <table>
+      <thead><tr><th class="left">分钟</th><th>条目数</th><th>处理</th></tr></thead>
+      <tbody>
+      {% for m in plan.shared %}
+        <tr><td class="left"><code>{{ m.minute }}</code></td><td>{{ m.entry_count }}</td><td>照用</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="muted">无共享分钟。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>新轮 {{ plan.round_id }} 预览结果</h2>
+    {% set s = plan.new_round %}
+    <table>
+      <thead><tr><th>状态</th><th>旧版 成功/开始（成功率）</th><th>新版 成功/开始（成功率）</th><th>差值（新−旧，pp）</th><th class="left">原因/备注</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag {{ s.status }}">{% if s.status == 'included' %}已纳入{% else %}未纳入{% endif %}</span></td>
+          <td>{{ s.old_successes }}/{{ s.old_starts }}{% if s.old_rate is not none %}（{{ "%.1f"|format(s.old_rate*100) }}%）{% endif %}</td>
+          <td>{{ s.new_successes }}/{{ s.new_starts }}{% if s.new_rate is not none %}（{{ "%.1f"|format(s.new_rate*100) }}%）{% endif %}</td>
+          <td>{% if s.diff_pp is not none %}{{ "%+.2f"|format(s.diff_pp) }}{% else %}—{% endif %}</td>
+          <td class="left">{{ s.reason or '' }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>受补入影响的已有轮次（迁入前 → 迁入后）</h2>
+    <table>
+      <thead>
+        <tr>
+          <th class="left">轮次</th>
+          <th>纳入状态（前→后）</th>
+          <th>旧版成功率（前→后）</th>
+          <th>新版成功率（前→后）</th>
+          <th>差值 pp（前→后）</th>
+          <th>差值变化（pp）</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for a in plan.affected_rounds %}
+        <tr>
+          <td class="left"><strong>{{ a.round_id }}</strong></td>
+          <td>
+            <span class="tag {{ a.before.status }}">{% if a.before.status == 'included' %}已纳入{% else %}未纳入{% endif %}</span>
+            →
+            <span class="tag {{ a.after.status }}">{% if a.after.status == 'included' %}已纳入{% else %}未纳入{% endif %}</span>
+            {% if a.status_changed %}<span class="pill insert" style="margin-left:4px;">变化</span>{% endif %}
+          </td>
+          <td>{{ "—" if a.before.old_rate is none else ("%.1f%%"|format(a.before.old_rate*100)) }} → {{ "—" if a.after.old_rate is none else ("%.1f%%"|format(a.after.old_rate*100)) }}</td>
+          <td>{{ "—" if a.before.new_rate is none else ("%.1f%%"|format(a.before.new_rate*100)) }} → {{ "—" if a.after.new_rate is none else ("%.1f%%"|format(a.after.new_rate*100)) }}</td>
+          <td>{{ "—" if a.before.diff_pp is none else "%+.2f"|format(a.before.diff_pp) }} → {{ "—" if a.after.diff_pp is none else "%+.2f"|format(a.after.diff_pp) }}</td>
+          <td>{% if a.diff_pp_delta is none %}—{% else %}{{ "%+.2f"|format(a.diff_pp_delta) }}{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">没有已有轮次的观测窗口覆盖迁入分钟，仅新轮会被计算。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>确认迁入</h2>
+    <p class="muted">确认时将按当前数据库重新核对：若待补清单、受影响轮次或预览结果发生变化，会拒绝并要求重新预览；不影响本计划的无关补传不会妨碍确认。任一失败都会整体回滚，保留原数据。</p>
+    <form method="post" action="/migration/confirm">
+      <input type="hidden" name="token" value="{{ plan.token }}">
+      <input type="hidden" name="migration_json" value="{{ raw_json }}">
+      <button class="confirm" type="submit">确认迁入历史轮次 {{ plan.round_id }}</button>
+    </form>
+  </div>
+  {% endif %}
+</main>
+</body>
+</html>

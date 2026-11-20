@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from . import database as db
-from .models import MinuteUpload, ScheduleIn
+from .migration import MigrationError, confirm_preview, create_preview
+from .models import MigrationCommitIn, MigrationIn, MinuteUpload, ScheduleIn
 from .stats import fetch_dashboard, recompute_rounds
 from .timeutil import minute_floor, parse_ts, to_minute
 
@@ -189,6 +190,114 @@ async def logs_form(request: Request):
     )
 
 
+@app.post("/api/migration/preview")
+def post_migration_preview(payload: MigrationIn):
+    """历史轮次迁入预览：不写业务数据，返回待补分钟、新轮结果、受影响轮次前后差。"""
+    conn = db.get_conn()
+    try:
+        plan = create_preview(conn, payload)
+        return JSONResponse(plan, status_code=200)
+    except MigrationError as exc:
+        return JSONResponse(
+            {"error": str(exc), "conflicts": exc.conflicts},
+            status_code=getattr(exc, "code", 400),
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/api/migration/confirm")
+def post_migration_confirm(payload: MigrationCommitIn):
+    """凭预览令牌确认迁入；按当前库重新核对，计划过期或冲突则拒绝（409）。"""
+    conn = db.get_conn()
+    try:
+        plan = confirm_preview(conn, payload.token)
+        return JSONResponse(
+            {
+                "imported_round": plan["round_id"],
+                "inserted_minutes": [x["minute"] for x in plan["to_insert"]],
+                "shared_minutes": [x["minute"] for x in plan["shared"]],
+                "affected_rounds": [a["round_id"] for a in plan["affected_rounds"]],
+            },
+            status_code=201,
+        )
+    except MigrationError as exc:
+        return JSONResponse(
+            {"error": str(exc), "conflicts": exc.conflicts},
+            status_code=getattr(exc, "code", 409),
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/migration/preview")
+async def migration_preview_form(request: Request):
+    form = await request.form()
+    raw = form.get("migration_json", "")
+    try:
+        payload = MigrationIn.model_validate(json.loads(raw))
+    except Exception as exc:
+        return _render_migration_error(request, f"迁入文件解析失败：{exc}")
+    conn = db.get_conn()
+    try:
+        try:
+            plan = create_preview(conn, payload)
+        except MigrationError as exc:
+            return _render_migration_error(
+                request, str(exc), conflicts=exc.conflicts, raw_json=raw
+            )
+        return templates.TemplateResponse(
+            request=request,
+            name="migration_preview.html",
+            context={
+                "plan": plan,
+                "raw_json": raw,
+                "msg_err": None,
+                "conflicts": None,
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.post("/migration/confirm")
+async def migration_confirm_form(request: Request):
+    form = await request.form()
+    token = (form.get("token", "") or "").strip()
+    raw = form.get("migration_json", "")
+    if not token:
+        return _render_migration_error(request, "缺少预览令牌，请重新预览后再确认", raw_json=raw)
+    conn = db.get_conn()
+    try:
+        try:
+            plan = confirm_preview(conn, token)
+        except MigrationError as exc:
+            return _render_migration_error(
+                request, str(exc), conflicts=exc.conflicts, raw_json=raw
+            )
+        return _redirect(
+            f"历史轮次 {plan['round_id']} 已迁入：补入 {len(plan['to_insert'])} 个分钟包，"
+            f"共享 {len(plan['shared'])} 个，重算轮次 "
+            f"{', '.join([plan['round_id']] + [a['round_id'] for a in plan['affected_rounds']])}"
+        )
+    finally:
+        conn.close()
+
+
+def _render_migration_error(request: Request, message: str, conflicts=None, raw_json: str = ""):
+    return templates.TemplateResponse(
+        request=request,
+        name="migration_preview.html",
+        context={
+            "plan": None,
+            "raw_json": raw_json,
+            "msg_err": message,
+            "conflicts": conflicts,
+        },
+        status_code=409 if conflicts else 400,
+    )
+
+
 @app.post("/api/reset")
 def reset_all():
     """危险操作：清空全部日志与排班，便于重新演示。"""
@@ -200,6 +309,7 @@ def reset_all():
             conn.execute("DELETE FROM round_stats")
             conn.execute("DELETE FROM segments")
             conn.execute("DELETE FROM rounds")
+            conn.execute("DELETE FROM migration_previews")
         return {"reset": True}
     finally:
         conn.close()
